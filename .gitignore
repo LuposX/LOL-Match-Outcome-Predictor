@@ -2,3 +2,5 @@
 .idea
 *.xml
 *.iml
+championidtable_location.txt
+dataset_location.txt
