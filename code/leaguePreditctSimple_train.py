@@ -4,8 +4,7 @@ Date: 20.05.20
 Purpose: Predict the outcome of a League Match with a Neural Network. Train the Neural Network for that.
 """
 
-# It varies wth "lreaguePredict" that this doesnt use comet
-
+import comet_ml
 import torch.nn as nn
 import torch.nn.functional as F
 import torch
@@ -22,6 +21,7 @@ from pathlib import Path
 import shutil
 import json
 
+
 def to_one_hot_vector_encoding(num_classes, input):
     a = torch.tensor([]).cpu()
     for data in input:
@@ -31,14 +31,13 @@ def to_one_hot_vector_encoding(num_classes, input):
 
 
 class LaegueDataset_train(Dataset):
-    def __init__(self, dataset_location, championidtable_location):
-        dataset = json.load(dataset_location)
-        self.dataset_train = dataset
-        self.dataset_train.columns = ["random", "participants"]
-        del dataset
+    def __init__(self ):
+        dataset_location = open(open("../dataset_location.txt").read())
+        championidtable_location = open("../championidtable_location.txt").read()
 
-        self.championid_to_name = pd.read_csv(
-            "E:/Datasets/league_of_legends_ranked_games_2020/champion_and_items/riot_champion.csv")
+        self.dataset_train = json.load(dataset_location)
+
+        self.championid_to_name = pd.read_csv(championidtable_location)
 
         self.lookuptable = self.championid_to_name["key"].values.tolist()
 
@@ -70,13 +69,15 @@ class LaegueDataset_train(Dataset):
 
 
 class NN(pl.LightningModule):
-    def __init__(self, hparams, dataset_location, championidtable_location):
+    def __init__(self, hparams, experiment_name):
         super().__init__()
 
-        self.hparams = hparams
+        # self.hparams = hparams  # Depreceated in newer versions
+        self.save_hyperparameters(hparams)
+
         self.checkpoint_folder = "LeaguePredictCheckpoints/"
-        self.dataset_location = dataset_location
-        self.championidtable_location = championidtable_location
+
+        self.experiment_name = experiment_name
 
         # creating checkpoint folder
         dirpath = Path(self.checkpoint_folder)
@@ -120,18 +121,18 @@ class NN(pl.LightningModule):
         return F.binary_cross_entropy(input.float(), target.float())
 
     def configure_optimizers(self):
-        return torch.optim.Adam(self.parameters(), lr=self.hparams.lr)
+        return torch.optim.Adam(self.parameters(), lr=self.hparams.LR)
 
     def train_dataloader(self):
-        train_dataset = LaegueDataset_train(self.dataset_location,  self.championidtable_location)
-        return DataLoader(train_dataset, num_workers=hparams.NUMWORK, batch_size=hparams.BATCHSIZE)
+        train_dataset = LaegueDataset_train()
+        return DataLoader(train_dataset, num_workers=self.hparams.NUMWORK, batch_size=self.hparams.BATCHSIZE)
 
     def val_dataloader(self):
-        val_dataset = LaegueDataset_train(self.dataset_location,  self.championidtable_location)
-        return DataLoader(val_dataset, num_workers=hparams.NUMWORK, batch_size=hparams.BATCHSIZE)
+        val_dataset = LaegueDataset_train()
+        return DataLoader(val_dataset, num_workers=self.hparams.NUMWORK, batch_size=self.hparams.BATCHSIZE)
 
     def on_epoch_end(self) -> None:
-        if self.current_epoch % self.hparams.save_model_every_epoch == 0:
+        if self.current_epoch % self.hparams.SAVE_MODEL_EVERY_EPOCH == 0:
             trainer.save_checkpoint(
                 self.checkpoint_folder + "/" + self.experiment_name + "_epoch_" + str(self.current_epoch) + ".ckpt")
             comet_logger.experiment.log_asset_folder(self.checkpoint_folder, step=self.current_epoch)
@@ -155,13 +156,13 @@ if __name__ == "__main__":
     # Parameter for the NN
     args = {
         "EPOCHS": 2,
-        "lr": 0.003,
+        "LR": 0.003,
         "AUTO_LR": False,
         # Runs a learning rate finder algorithm(https://arxiv.org/abs/1506.01186) before any training, to find optimal initial learning rate.
         "BENCHMARK": True,  # This flag is likely to increase the speed of your system if your input sizes don’t change.
         "NUMWORK": 1,
         "BATCHSIZE": 100,
-        "save_model_every_epoch": 1
+        "SAVE_MODEL_EVERY_EPOCH": 1,
     }
     hparams = Namespace(**args)
 
@@ -181,8 +182,7 @@ if __name__ == "__main__":
     )
 
     # Init the Neural Network(NN)
-    net = NN(hparams, "E:/Datasets/league_of_legends_ranked_games_2020/champion_and_items/league_ranked_2020_short_for_testing.json",
-             "E:/Datasets/league_of_legends_ranked_games_2020/champion_and_items/riot_champion.csv")
+    net = NN(hparams, experiment_name)
 
     # logging
     comet_logger.experiment.set_model_graph(str(net))
