@@ -5,9 +5,9 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class LaegueDataset_train(Dataset):
-    def __init__(self ):
-        dataset_location = open(open("../dataset_location.txt").read())
-        championidtable_location = open("../championidtable_location.txt").read()
+    def __init__(self):
+        dataset_location = open("league_ranked_2020_short_for_testing.json")
+        championidtable_location = "riot_champion.csv"
 
         self.dataset_train = json.load(dataset_location)
 
@@ -16,13 +16,17 @@ class LaegueDataset_train(Dataset):
         self.lookuptable = self.championid_to_name["key"].values.tolist()
 
     def __len__(self):
-        return len(self.dataset_train)
+        return len(self.dataset_train["data"])
 
     def __getitem__(self, idx_match):
         try:
             data = [self.dataset_train["data"][idx_match][i]["championId"] for i in
                     range(10)]  # Get the Champion keys of every player in one match
-            data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])  # convert champion keys into ids
+            data = torch.tensor(
+                [self.lookuptable.index(data[i]) for i in range(10)])  # convert champion keys into index notation
+
+            # convert data into one hot vecot encoding
+            data = torch.eye(148).index_select(dim=0, index=data)
 
             target = torch.tensor([int(self.dataset_train["data"][idx_match][1]["stats"]["win"]),
                                    int(self.dataset_train["data"][idx_match][8]["stats"]["win"])
@@ -45,3 +49,5 @@ class LaegueDataset_train(Dataset):
 if __name__ == "__main__":
     traindataset = LaegueDataset_train()
     train_dataloader = DataLoader(traindataset, batch_size=64, shuffle=True)
+
+    print(len(train_dataloader))
