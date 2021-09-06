@@ -47,16 +47,13 @@ class LaegueDataset_train(Dataset):
 
     def __getitem__(self, idx_match):
         try:
+            # Get the Champion keys of every player in one match
+            data = [self.dataset_train["data"][idx_match][i]["championId"] for i in range(10)]
 
-            data = [self.dataset_train["data"][idx_match][i]["championId"] for i in
-                    range(10)]  # Get the Champion keys of every player in one match
-            data = torch.tensor(
-                [self.lookuptable.index(data[i]) for i in range(10)])  # convert champion keys into index notation
+            # convert champion keys into index notation
+            data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])
 
             # convert data into one hot vecot encoding
-            data = torch.eye(148).index_select(dim=0, index=data)
-
-            # convert it into one hot vector encoding
             data = torch.eye(148).index_select(dim=0, index=data)
             data = data.flatten()
 
@@ -65,11 +62,21 @@ class LaegueDataset_train(Dataset):
                                    ])
 
         except Exception as e:
+            data = self.dataset_train["data"][idx_match]
+            type__ = type(self.dataset_train["data"][idx_match])
             print(f"An Exception occurred when trying to load the dataset: {e}")
+            print(f"data: {data}")
+            print(f"type of data: {type__}")
+            print(f"index: {idx_match}")
+            # print(len(self.dataset_train["data"][idx_match]))
 
-            data = [self.dataset_train["data"][idx_match + 1][i]["championId"] for i in
-                    range(10)]  # Get the Champion keys of every player in one match
-            data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])  # convert champion keys into ids
+            raise Exception
+
+            #  Get the Champion keys of every player in one match
+            data = [self.dataset_train["data"][idx_match + 1][i]["championId"] for i in range(10)]
+
+            # convert champion keys into ids
+            data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])
 
             # convert it into one hot vector encoding
             data = torch.eye(148).index_select(dim=0, index=data)
@@ -104,7 +111,7 @@ class NN(pl.LightningModule):
         )
         self.linear2 = nn.Sequential(
             nn.Linear(in_features=50, out_features=20),
-            nn.BatchNorm1d(num_features=20),  # Batchnorm only in hidden layers?
+            # nn.BatchNorm1d(num_features=20),  # Batchnorm only in hidden layers?
             nn.PReLU()
         )
         self.linear3 = nn.Sequential(
@@ -135,7 +142,12 @@ class NN(pl.LightningModule):
 
     def validation_epoch_end(self, outputs):
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
+        self.log("avg_epoch_val_loss", avg_loss)
         return {'val_loss': avg_loss}
+
+    def training_epoch_end(self, outputs):
+        avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
+        self.log("avg_epoch_train_loss", avg_loss)
 
     def loss(self, input, target):
         return F.binary_cross_entropy(input.float(), target.float())
@@ -166,6 +178,8 @@ class NN(pl.LightningModule):
             access_rights = 0o755
             os.makedirs(dirpath, access_rights)
 
+
+
     def on_train_end(self):
         trainer.save_checkpoint(
             self.checkpoint_folder + "/" + self.experiment_name + "_epoch_" + str(self.current_epoch) + ".ckpt")
@@ -175,13 +189,13 @@ class NN(pl.LightningModule):
 if __name__ == "__main__":
     # Parameter for the NN
     args = {
-        "EPOCHS": 2,
+        "EPOCHS": 10,
         "LR": 0.003,
         "AUTO_LR": False,
         # Runs a learning rate finder algorithm(https://arxiv.org/abs/1506.01186) before any training, to find optimal initial learning rate.
         "BENCHMARK": True,  # This flag is likely to increase the speed of your system if your input sizes don’t change.
         "NUMWORK": 1,
-        "BATCHSIZE": 1,  # needs to be smaller than the size of dataset
+        "BATCHSIZE": 5,  # needs to be smaller than the size of dataset
         "SAVE_MODEL_EVERY_EPOCH": 1,
     }
     hparams = Namespace(**args)
