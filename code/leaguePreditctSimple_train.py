@@ -27,13 +27,14 @@ def to_one_hot_vector_encoding(num_classes, input):
     for data in input:
         data = data.cpu()
         a = torch.cat((a, torch.eye(num_classes).cpu().index_select(dim=0, index=data).view(-1, 10 * num_classes)))
-    return a.cuda()
+    return a
+
 
 
 class LaegueDataset_train(Dataset):
     def __init__(self):
-        dataset_location = open("league_ranked_2020_short_for_testing.json")
-        championidtable_location = "riot_champion.csv"
+        dataset_location = open(open("../dataset_location.txt").read())
+        championidtable_location = open("../championidtable_location.txt").read()
 
         self.dataset_train = json.load(dataset_location)
 
@@ -46,6 +47,7 @@ class LaegueDataset_train(Dataset):
 
     def __getitem__(self, idx_match):
         try:
+
             data = [self.dataset_train["data"][idx_match][i]["championId"] for i in
                     range(10)]  # Get the Champion keys of every player in one match
             data = torch.tensor(
@@ -54,16 +56,24 @@ class LaegueDataset_train(Dataset):
             # convert data into one hot vecot encoding
             data = torch.eye(148).index_select(dim=0, index=data)
 
+            # convert it into one hot vector encoding
+            data = torch.eye(148).index_select(dim=0, index=data)
+            data = data.flatten()
+
             target = torch.tensor([int(self.dataset_train["data"][idx_match][1]["stats"]["win"]),
                                    int(self.dataset_train["data"][idx_match][8]["stats"]["win"])
                                    ])
 
         except Exception as e:
-            print("An Exception occurred when trying to load the dataset: " + e)
+            print(f"An Exception occurred when trying to load the dataset: {e}")
 
             data = [self.dataset_train["data"][idx_match + 1][i]["championId"] for i in
                     range(10)]  # Get the Champion keys of every player in one match
             data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])  # convert champion keys into ids
+
+            # convert it into one hot vector encoding
+            data = torch.eye(148).index_select(dim=0, index=data)
+            data = data.flatten()
 
             target = torch.tensor([int(self.dataset_train["data"][idx_match + 1][1]["stats"]["win"]),
                                    int(self.dataset_train["data"][idx_match + 1][8]["stats"]["win"])
@@ -88,32 +98,38 @@ class NN(pl.LightningModule):
         if not dirpath.exists():
             os.makedirs(dirpath, 0o755)
 
-        self.main = nn.Sequential(
-            nn.Linear(in_features=148 * 10, out_features=50),  # "*10" because we have 10 players
+        self.linear1 = nn.Sequential(
+            nn.Linear(in_features=1480, out_features=50),  # "*10" because we have 10 players
             nn.PReLU(),
+        )
+        self.linear2 = nn.Sequential(
             nn.Linear(in_features=50, out_features=20),
             nn.BatchNorm1d(num_features=20),  # Batchnorm only in hidden layers?
-            nn.PReLU(),
+            nn.PReLU()
+        )
+        self.linear3 = nn.Sequential(
             nn.Linear(in_features=20, out_features=2),
             nn.Sigmoid()
         )
 
     def forward(self, x):
-        return self.main(x)
+        x = self.linear1(x)
+        x = self.linear2(x)
+        x = self.linear3(x)
+        return x
+
 
     def training_step(self, batch, batch_idx):
         x, y = batch
-        x = to_one_hot_vector_encoding(148, x)
         y_hat = self(x)
-        loss = self.loss(y_hat, y.cuda())
+        loss = self.loss(y_hat, y)
 
         return {"loss": loss, "log": loss}
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
-        x = to_one_hot_vector_encoding(148, x)
         y_hat = self(x)
-        loss = self.loss(y_hat, y.cuda())
+        loss = self.loss(y_hat, y)
 
         return {"val_loss": loss, "log": loss}
 
@@ -165,7 +181,7 @@ if __name__ == "__main__":
         # Runs a learning rate finder algorithm(https://arxiv.org/abs/1506.01186) before any training, to find optimal initial learning rate.
         "BENCHMARK": True,  # This flag is likely to increase the speed of your system if your input sizes don’t change.
         "NUMWORK": 1,
-        "BATCHSIZE": 100,
+        "BATCHSIZE": 1,  # needs to be smaller than the size of dataset
         "SAVE_MODEL_EVERY_EPOCH": 1,
     }
     hparams = Namespace(**args)
@@ -198,7 +214,7 @@ if __name__ == "__main__":
         shutil.rmtree(dirpath)
 
     # Init our trainer
-    trainer = Trainer(gpus=1,
+    trainer = Trainer(gpus=0,
                       max_epochs=args["EPOCHS"],
                       logger=comet_logger,
                       # auto_lr_find=args["AUTO_LR"],
