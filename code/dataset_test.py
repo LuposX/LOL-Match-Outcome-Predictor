@@ -5,9 +5,9 @@ from torch.utils.data import DataLoader, Dataset
 
 
 class LaegueDataset_train(Dataset):
-    def __init__(self):
-        dataset_location = open("league_ranked_2020_short_for_testing.json")
-        championidtable_location = "riot_champion.csv"
+    def __init__(self, dataset_location_file, championid_file_location):
+        dataset_location = open(open(dataset_location_file).read())
+        championidtable_location = open(championid_file_location).read()
 
         self.dataset_train = json.load(dataset_location)
 
@@ -47,7 +47,7 @@ class LaegueDataset_train(Dataset):
 
 
 if __name__ == "__main__":
-    traindataset = LaegueDataset_train()
-    train_dataloader = DataLoader(traindataset, batch_size=64, shuffle=True)
+    traindataset = LaegueDataset_train("../test_dataset_location.txt", "../championidtable_location.txt")
+    train_dataloader = DataLoader(traindataset, batch_size=1, shuffle=True)
 
     print(len(train_dataloader))

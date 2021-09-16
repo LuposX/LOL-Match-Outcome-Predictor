@@ -19,7 +19,8 @@ import os
 from argparse import Namespace
 from pathlib import Path
 import shutil
-import json
+import linecache
+import simplejson
 
 
 def to_one_hot_vector_encoding(num_classes, input):
@@ -30,61 +31,76 @@ def to_one_hot_vector_encoding(num_classes, input):
     return a
 
 
+# Used to count the lines fast
+# Source: https://stackoverflow.com/questions/845058/how-to-get-line-count-of-a-large-file-cheaply-in-python
+def _make_gen(reader):
+    b = reader(1024 * 1024)
+    while b:
+        yield b
+        b = reader(1024 * 1024)
+
+
+def rawgencount(filename):
+    f = open(filename, 'rb')
+    f_gen = _make_gen(f.raw.read)
+    return sum(buf.count(b'\n') for buf in f_gen)
+
 
 class LaegueDataset_train(Dataset):
-    def __init__(self):
-        dataset_location = open(open("../dataset_location.txt").read())
-        championidtable_location = open("../championidtable_location.txt").read()
+    def __init__(self, dataset_location_file, championid_file_location):
+        # load the dataset
+        self._filename = open(dataset_location_file).read()
+        self._total_data = 0
+        self._total_data = rawgencount(self._filename)
 
-        self.dataset_train = json.load(dataset_location)
-
-        self.championid_to_name = pd.read_csv(championidtable_location)
-
-        self.lookuptable = self.championid_to_name["key"].values.tolist()
+        championidtable_location = open(championid_file_location, encoding='utf8').read()
+        championid_to_name = pd.read_csv(championidtable_location)
+        self.lookuptable = championid_to_name["key"].values.tolist()
 
     def __len__(self):
-        return len(self.dataset_train["data"])
+        return self._total_data
 
     def __getitem__(self, idx_match):
         try:
+            line = linecache.getline(self._filename, idx_match + 1).rstrip('\n')
+            json_line = simplejson.loads(line)
+
             # Get the Champion keys of every player in one match
-            data = [self.dataset_train["data"][idx_match][i]["championId"] for i in range(10)]
+            data = [json_line[i]["championId"] for i in range(10)]
 
             # convert champion keys into index notation
             data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])
+            data = data.type_as(data)  # Makes that the tensor is in the memory of the right device gpu or cpu
 
             # convert data into one hot vecot encoding
-            data = torch.eye(148).index_select(dim=0, index=data)
-            data = data.flatten()
+            data = torch.eye(148).index_select(dim=0, index=data).flatten()
 
-            target = torch.tensor([int(self.dataset_train["data"][idx_match][1]["stats"]["win"]),
-                                   int(self.dataset_train["data"][idx_match][8]["stats"]["win"])
+            target = torch.tensor([int(json_line[1]["stats"]["win"]),
+                                   int(json_line[8]["stats"]["win"])
                                    ])
+            target = target.type_as(target)
 
         except Exception as e:
-            data = self.dataset_train["data"][idx_match]
-            type__ = type(self.dataset_train["data"][idx_match])
             print(f"An Exception occurred when trying to load the dataset: {e}")
-            print(f"data: {data}")
-            print(f"type of data: {type__}")
-            print(f"index: {idx_match}")
-            # print(len(self.dataset_train["data"][idx_match]))
+            print(line)
 
-            raise Exception
+            line = linecache.getline(self._filename, idx_match + 3).rstrip('\n')
+            json_line = simplejson.loads(line)
 
-            #  Get the Champion keys of every player in one match
-            data = [self.dataset_train["data"][idx_match + 1][i]["championId"] for i in range(10)]
+            # Get the Champion keys of every player in one match
+            data = [json_line[i]["championId"] for i in range(10)]
 
-            # convert champion keys into ids
+            # convert champion keys into index notation
             data = torch.tensor([self.lookuptable.index(data[i]) for i in range(10)])
+            data = data.type_as(data)
 
-            # convert it into one hot vector encoding
-            data = torch.eye(148).index_select(dim=0, index=data)
-            data = data.flatten()
+            # convert data into one hot vecot encoding
+            data = torch.eye(148).index_select(dim=0, index=data).flatten()
 
-            target = torch.tensor([int(self.dataset_train["data"][idx_match + 1][1]["stats"]["win"]),
-                                   int(self.dataset_train["data"][idx_match + 1][8]["stats"]["win"])
+            target = torch.tensor([int(json_line[1]["stats"]["win"]),
+                                   int(json_line[8]["stats"]["win"])
                                    ])
+            target = target.type_as(target)
 
         return data, target
 
@@ -125,29 +141,49 @@ class NN(pl.LightningModule):
         x = self.linear3(x)
         return x
 
-
     def training_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
         loss = self.loss(y_hat, y)
 
-        return {"loss": loss, "log": loss}
+        # calculate accuracy
+        y_hat = torch.argmax(y_hat, dim=1)
+        y = torch.argmax(y, dim=1)
+        acc_train = torch.tensor(torch.sum(y == y_hat).item() / (len(y) * 1.0))
+
+        return {"loss": loss, "acc_train": acc_train}
 
     def validation_step(self, batch, batch_idx):
         x, y = batch
         y_hat = self(x)
         loss = self.loss(y_hat, y)
 
-        return {"val_loss": loss, "log": loss}
+        # calculate accuracy
+        y_hat = torch.argmax(y_hat, dim=1)
+        y = torch.argmax(y, dim=1)
+        acc_val = torch.tensor(torch.sum(y == y_hat).item() / (len(y) * 1.0))
+
+        return {"val_loss": loss, "acc_val": acc_val}
 
     def validation_epoch_end(self, outputs):
+        # average loss per epoch
         avg_loss = torch.stack([x['val_loss'] for x in outputs]).mean()
         self.log("avg_epoch_val_loss", avg_loss)
+
+        # average accuracy per epoch
+        avg_acc = torch.stack([x['acc_val'] for x in outputs]).mean()
+        self.log("avg_epoch_val_acc", avg_acc)
+
         return {'val_loss': avg_loss}
 
     def training_epoch_end(self, outputs):
+        # average loss per epoch
         avg_loss = torch.stack([x['loss'] for x in outputs]).mean()
         self.log("avg_epoch_train_loss", avg_loss)
+
+        # average accuracy per epoch
+        avg_acc = torch.stack([x['acc_train'] for x in outputs]).mean()
+        self.log("avg_epoch_train_acc", avg_acc)
 
     def loss(self, input, target):
         return F.binary_cross_entropy(input.float(), target.float())
@@ -156,11 +192,11 @@ class NN(pl.LightningModule):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.LR)
 
     def train_dataloader(self):
-        train_dataset = LaegueDataset_train()
+        train_dataset = LaegueDataset_train("../train_dataset_location.txt", "../championidtable_location.txt")
         return DataLoader(train_dataset, num_workers=self.hparams.NUMWORK, batch_size=self.hparams.BATCHSIZE)
 
     def val_dataloader(self):
-        val_dataset = LaegueDataset_train()
+        val_dataset = LaegueDataset_train("../test_dataset_location.txt", "../championidtable_location.txt")
         return DataLoader(val_dataset, num_workers=self.hparams.NUMWORK, batch_size=self.hparams.BATCHSIZE)
 
     def on_epoch_end(self) -> None:
@@ -178,8 +214,6 @@ class NN(pl.LightningModule):
             access_rights = 0o755
             os.makedirs(dirpath, access_rights)
 
-
-
     def on_train_end(self):
         trainer.save_checkpoint(
             self.checkpoint_folder + "/" + self.experiment_name + "_epoch_" + str(self.current_epoch) + ".ckpt")
@@ -194,8 +228,8 @@ if __name__ == "__main__":
         "AUTO_LR": False,
         # Runs a learning rate finder algorithm(https://arxiv.org/abs/1506.01186) before any training, to find optimal initial learning rate.
         "BENCHMARK": True,  # This flag is likely to increase the speed of your system if your input sizes don’t change.
-        "NUMWORK": 1,
-        "BATCHSIZE": 5,  # needs to be smaller than the size of dataset
+        "NUMWORK": 4,
+        "BATCHSIZE": 64,  # needs to be smaller than the size of dataset
         "SAVE_MODEL_EVERY_EPOCH": 1,
     }
     hparams = Namespace(**args)
@@ -220,7 +254,7 @@ if __name__ == "__main__":
 
     # logging
     comet_logger.experiment.set_model_graph(str(net))
-    comet_logger.experiment.add_tags(tags=["testing"])
+    comet_logger.experiment.add_tags(tags=["FULL", "GPU"])
     comet_logger.experiment.log_dataset_info(dataset_name)
 
     # deleting the checkpoint folder
@@ -228,7 +262,7 @@ if __name__ == "__main__":
         shutil.rmtree(dirpath)
 
     # Init our trainer
-    trainer = Trainer(gpus=0,
+    trainer = Trainer(gpus=1,
                       max_epochs=args["EPOCHS"],
                       logger=comet_logger,
                       # auto_lr_find=args["AUTO_LR"],

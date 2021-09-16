@@ -3,4 +3,5 @@
 *.xml
 *.iml
 championidtable_location.txt
-dataset_location.txt
+test_dataset_location.txt
+train_dataset_location.txt
